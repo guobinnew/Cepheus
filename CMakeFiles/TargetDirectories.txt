@@ -1,0 +1,5 @@
+/home/unique/Work/opencv/CMakeFiles/edit_cache.dir
+/home/unique/Work/opencv/CMakeFiles/opencv_qrcode.dir
+/home/unique/Work/opencv/CMakeFiles/opencv_example.dir
+/home/unique/Work/opencv/CMakeFiles/rebuild_cache.dir
+/home/unique/Work/opencv/CMakeFiles/opencv_detect.dir
