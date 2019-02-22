@@ -17,6 +17,7 @@
 #include <opencv2/videoio.hpp>
 #include <iostream>
 #include <vector>
+#include <map>
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -37,13 +38,6 @@ static const struct option long_options[] = {
     {"help", no_argument, NULL, 'h'},
     {NULL, 0, NULL, 0}
 };
-
-//自定义“小于”
-bool comp(const Rect &a, const Rect &b){
-    Point atl = a.tl();
-    Point btl = b.tl();
-    return atl.x < btl.x || atl.y < btl.y;
-}
 
 bool createDir( const char *szDirectoryPath , int iDirPermission = 0744 ){
 
@@ -84,6 +78,170 @@ bool createDir( const char *szDirectoryPath , int iDirPermission = 0744 ){
     return true;
 }
 
+const int WINDOW_WIDTH = 640;
+const int WINDOW_HEIGHT = 480;
+
+void showMat(const string& title, Mat& img) {
+    string wid = "Action: " + title;
+    namedWindow(wid, 0);
+    resizeWindow(wid, WINDOW_WIDTH, WINDOW_HEIGHT); 
+    imshow(wid, img);  
+}
+
+typedef bool (*SeqFunc)(Mat& src, Mat& result, bool show);
+
+// 颜色过滤
+bool seq_colorFilter(Mat& src, Mat& result, bool show = true){
+    Mat hsv;
+    cvtColor(src, hsv, COLOR_BGR2HSV);
+    result.create(src.size(), src.type());
+    for(int i=0;i<hsv.rows;i++){
+        uchar* srcptr = src.ptr<uchar>(i);
+        uchar* rowptr = hsv.ptr<uchar>(i);
+        for(int j=0;j<hsv.cols;j++)
+        {
+            int H = int(rowptr[j*3 + 0]);  // 0-180
+            int S = int(rowptr[j*3 + 1]);  // 0-255
+            int V = int(rowptr[j*3 + 2]);  // 0-255
+
+            if( ((H >= 0  && H <= 10) || (H >= 125 && H <= 180)) && S >= 43){
+               result.ptr<uchar>(i)[j * 3 + 0] = src.ptr<uchar>(i)[j * 3 + 0];
+               result.ptr<uchar>(i)[j * 3 + 1] = src.ptr<uchar>(i)[j * 3 + 1];
+               result.ptr<uchar>(i)[j * 3 + 2] = src.ptr<uchar>(i)[j * 3 + 2];
+            } else {
+               result.ptr<uchar>(i)[j * 3 + 0] = 255;
+               result.ptr<uchar>(i)[j * 3 + 1] = 255;
+               result.ptr<uchar>(i)[j * 3 + 2] = 255;
+            }
+        }
+    }
+    hsv.release();
+    if (show) {
+        showMat("颜色过滤", result);  
+    }
+    return true;
+}
+
+// 移除高光
+bool seq_highlightRemove(Mat& src, Mat& result, bool show = true){
+    result.create(src.size(), src.type());
+    
+    for (int i = 0; i < src.rows; i++) {
+        uchar* rowptr = src.ptr<uchar>(i);
+		for (int j = 0; j < src.cols; j++) {
+				float B = rowptr[j * 3 + 0] / 255.0;
+				float G = rowptr[j * 3 + 1] / 255.0;
+				float R = rowptr[j * 3 + 2] / 255.0;
+ 
+				float alpha_r = R / (R + G + B);
+				float alpha_g = G / (R + G + B);
+				float alpha_b = B / (R + G + B);
+ 
+				float alpha = max(max(alpha_r, alpha_g), alpha_b);
+				float MaxC = max(max(R, G), B);
+				float minalpha = min(min(alpha_r, alpha_g), alpha_b);
+				float beta_r = 1 - (alpha - alpha_r) / (3 * alpha - 1);
+				float beta_g = 1 - (alpha - alpha_g) / (3 * alpha - 1);
+				float beta_b = 1 - (alpha - alpha_b) / (3 * alpha - 1);
+				float beta = max(max(beta_r, beta_g), beta_b);
+				float gama_r = (alpha_r - minalpha) / (1 - 3 * minalpha);
+				float gama_g = (alpha_g - minalpha) / (1 - 3 * minalpha);
+				float gama_b = (alpha_b - minalpha) / (1 - 3 * minalpha);
+				float gama = max(max(gama_r, gama_g), gama_b);
+ 
+				float temp = (gama * (R + G + B) - MaxC) / (3 * gama - 1);
+                     
+				result.ptr<uchar>(i)[j * 3 + 0] = cvRound((B - (temp + 0.5)) * 255);
+				result.ptr<uchar>(i)[j * 3 + 1] = cvRound((G - (temp + 0.5)) * 255);
+				result.ptr<uchar>(i)[j * 3 + 2] = cvRound((R - (temp + 0.5)) * 255);
+				
+		}
+	}
+
+    if (show) {
+        showMat("移除高光", result);  
+    }
+
+    return true;
+}
+
+
+// 灰度化
+bool seq_gray(Mat& src, Mat& result, bool show = true){
+    cvtColor(src, result, COLOR_BGR2GRAY);
+    if (show) {
+        showMat("灰度化", result);  
+    }
+    return true;
+}
+
+// 锐化
+bool seq_sharpen(Mat& src, Mat& result, bool show = true){
+    // Sharpen
+    Mat kernel(3,3,CV_32F,cv::Scalar(0));
+    kernel.at<float>(1,1) = 5.0;
+    kernel.at<float>(0,1) = -1.0;
+    kernel.at<float>(1,0) = -1.0;    
+    kernel.at<float>(1,2) = -1.0;
+    kernel.at<float>(2,1) = -1.0;
+
+    result.create(src.size(),src.type());
+    //对图像进行滤波
+    filter2D(src, result, src.depth(), kernel);
+
+    if (show) {
+        showMat("锐化", result);  
+    }
+    return true;
+}
+
+// 高斯平滑
+bool seq_guussian(Mat& src, Mat& result, bool show = true){
+    GaussianBlur(src, result, Size(5,5), 0); 
+    if (show) {
+        showMat("高斯平滑", result);  
+    }
+    return true;
+}
+
+// 二值化
+bool seq_binary(Mat& src, Mat& result, bool show = true){
+    threshold(src, result, 100, 255, THRESH_BINARY_INV);
+    if (show) {
+        showMat("二值化", result);  
+    }
+    return true;
+}
+
+// 闭运算
+bool seq_closure(Mat& src, Mat& result, bool show = true){
+    Mat element = getStructuringElement(0, Size(5,5)); 
+    morphologyEx(src, result, MORPH_CLOSE, element);
+    if (show) {
+        showMat("闭运算", result);  
+    }
+    return true;
+}
+
+// 腐蚀
+bool seq_erode(Mat& src, Mat& result, bool show = true){
+    Mat element = getStructuringElement(MORPH_RECT, Size(10, 10));
+    erode(src, result, element);
+    if (show) {
+        showMat("腐蚀", result);  
+    }
+    return true;
+}
+
+// 边缘提取
+bool seq_canny(Mat& src, Mat& result, bool show = true){
+    Canny(src, result, 100, 200);
+    if (show) {
+        showMat("边缘提取", result);  
+    }
+    return true;
+}
+
 
 int main(int argc, char *argv[])
 {
@@ -113,76 +271,63 @@ int main(int argc, char *argv[])
     }
 
     cout << "Built with OpenCV " << CV_VERSION << endl;
-    
+
+    map<string, SeqFunc> sequences;
+    sequences.insert(make_pair("gray", seq_gray));
+    sequences.insert(make_pair("sharpen", seq_sharpen));
+    sequences.insert(make_pair("guussian", seq_guussian));
+    sequences.insert(make_pair("binary", seq_binary));
+    sequences.insert(make_pair("closure", seq_closure));
+    sequences.insert(make_pair("erode", seq_erode));
+    sequences.insert(make_pair("canny", seq_canny));
+    sequences.insert(make_pair("highlightRemove", seq_highlightRemove));
+    sequences.insert(make_pair("colorFilter", seq_colorFilter));
+
     Mat img = imread(file);
     namedWindow("原图",0);
     resizeWindow("原图", 640, 480); 
     imshow("原图", img);
 
-    //灰度化
-    Mat gray;
-    cvtColor(img, gray, COLOR_BGR2GRAY); 
-    namedWindow("灰度化", 0);
-    resizeWindow("灰度化", 640, 480); 
-    imshow("灰度化", gray);
+    Mat src = img.clone();
+    //Mat gray;
+    //seq_gray(img, gray, false);
+    //cvtColor(gray, img, COLOR_GRAY2BGR);
 
-    // 高斯平滑
-    Mat guussian;
-    GaussianBlur(gray,guussian,Size(5,5),0); 
-    namedWindow("高斯平滑", 0);
-    resizeWindow("高斯平滑", 640, 480); 
-    imshow("高斯平滑", guussian);
-
-     //二值化
-    Mat binary;
-    threshold(guussian, binary, 100, 200, THRESH_BINARY);
-    cvtColor(binary, img, COLOR_GRAY2BGRA);
-    namedWindow("二值化", 0);
-    resizeWindow("二值化", 640, 480); 
-    imshow("二值化", binary);
-
-    //闭运算
-    Mat closure;
-    Mat element = getStructuringElement(0,Size(7,7)); 
-    morphologyEx(binary, closure, MORPH_CLOSE, element);   
-    namedWindow("闭运算", 0);
-    resizeWindow("闭运算", 640, 480); 
-    imshow("闭运算", closure);
-
-    //腐蚀
-    Mat ercode;
-    Mat erodeElement = getStructuringElement(MORPH_RECT, Size(13, 13));
-    erode(closure, ercode, erodeElement);
-    namedWindow("腐蚀", 0);
-    resizeWindow("腐蚀", 640, 480);
-    imshow("腐蚀", ercode);
-
-    /*
-    // 高斯平滑
-    Mat guussian;
-    GaussianBlur(ercode,guussian,Size(3,3),0); 
-    namedWindow("高斯平滑", 0);
-    resizeWindow("高斯平滑", 640, 480); 
-    imshow("高斯平滑", guussian);
-
-    // 边缘提取
-    Mat edge;
-    Canny(guussian, edge, 100, 200);
-    namedWindow("边缘提取", 0);
-    resizeWindow("边缘提取", 640, 480); 
-    imshow("边缘提取", edge);
-    */
+    vector<string> pipeline;
+    pipeline.push_back("colorFilter");
+    //pipeline.push_back("highlightRemove");
+    pipeline.push_back("gray");
+    pipeline.push_back("closure");
+    pipeline.push_back("binary");
+    pipeline.push_back("erode");
+    //pipeline.push_back("canny");
+    
+    //
+    Mat result;
+    for(vector<string>::iterator pit = pipeline.begin(); pit != pipeline.end(); ++pit) {
+       map<string, SeqFunc>::iterator sit = sequences.find(*pit);
+       if (sit == sequences.end()) {
+           cerr << " can not found :" << *pit << endl; 
+           continue;
+       }
+       sit->second(src, result, true);
+       src = result.clone();
+       result.release();
+    }
+   
 
     //轮廓检测
     vector<vector<Point> > contours;  //定义一个容器来存储所有检测到的轮廊
     vector<Vec4i> hierarchy;
     //轮廓检测函数
-    Mat conv(ercode.size(), CV_8UC1);
-    ercode.convertTo(conv, CV_8UC1);
+    Mat conv(src.size(), CV_8UC1);
+    src.convertTo(conv, CV_8UC1);
     findContours(conv, contours, hierarchy, RETR_TREE, CHAIN_APPROX_NONE, Point(0, 0));
     
-    //取出身份证号码区域
+    //取出区域
     vector<Rect> rects;
+    char filename[25];
+    int size = min(img.rows, img.cols);
     Rect numberRect = Rect(0, 0, 0, 0);
     vector<vector<Point> >::const_iterator itContours = contours.begin();
     long max_Index = static_cast<long>(contours.size());
@@ -193,15 +338,22 @@ int main(int argc, char *argv[])
 
         // 剔除尺寸过小的区域(64*64)
         float rate = min(numberRect.width, numberRect.height) * 1.0 / max(numberRect.width, numberRect.height);
-        if ( rate < 0.85 || numberRect.height < 64 || numberRect.width < 64 ) {
+        cout << rate << numberRect.size() << " - hierarchy [" << i << "]: " << hierarchy[i][0] << "," << hierarchy[i][1] << "," << hierarchy[i][2] << endl;
+
+        if ( rate < 0.6 || numberRect.height < 64 || numberRect.width < 64 ) {
             continue;
         }
+
+        //Mat dst(numberRect.height, numberRect.width, CV_8UC4, numberRect.area());
+        //dst = img(numberRect);
+        //sprintf(filename, "%s/region-%d.jpg", out, i);
+        //imwrite(filename, dst);
   
-        if ( hierarchy[i][0] >= 0 || hierarchy[i][1] >= 0 || hierarchy[i][2] < 0) {
+        if ( hierarchy[i][2] < 0 ) {
             continue;
         } 
 
-        cout << "hierarchy [" << i << "]: " << hierarchy[i][0] << "," << hierarchy[i][1] << "," << hierarchy[i][2] << endl;
+        //cout << "hierarchy [" << i << "]: " << hierarchy[i][0] << "," << hierarchy[i][1] << "," << hierarchy[i][2] << endl;
 
         // 检查是否包含
         bool invalid = false;
@@ -210,12 +362,12 @@ int main(int argc, char *argv[])
             Rect src = rects[j];
             Rect intersection = src & rect;
             if (intersection == rect){
+                rects[j] = rect;
                 invalid = true;
                 break;
             }
 
             if (intersection == src) {
-                rects[j] = rect;
                 invalid = true;
                 break;
             }
@@ -225,44 +377,66 @@ int main(int argc, char *argv[])
             continue;
         }
         rects.push_back(numberRect);
+        size = min(size, min(numberRect.width, numberRect.height));
     }
 
     // 根据x坐标排序
-    sort(rects.begin(),rects.end(),comp);
+    int delta = size / 4;
+    sort(rects.begin(),rects.end(),[&delta](const Rect &a, const Rect &b){
+          return a.x < (b.x - delta) || a.y < (b.y - delta);  
+    });
 
     createDir(out);
+    vector<int> rows;
     vector<string> content;
     int num = rects.size();
     for(int i=0; i < num; i++) {
         numberRect = rects[i];
         Mat dst(numberRect.height, numberRect.width, CV_8UC4, numberRect.area());
         dst = img(numberRect);
-        char filename[25];
-        sprintf(filename, "%s/region-%d.jpg", out, i);
-        
-        imwrite(filename, dst);
+        Mat dstResize = Mat::zeros(160, 160, CV_8UC3); //我要转化为512*512大小的
+        resize(dst, dstResize, dstResize.size());
+        sprintf(filename, "%s/cell-%d.jpg", out, i);
+        imwrite(filename, dstResize);
 
         // Create luminance  source
         Mat dstGray;
-        cvtColor(dst, dstGray, COLOR_BGR2GRAY);
+        cvtColor(dstResize, dstGray, COLOR_BGR2GRAY);
+        sprintf(filename, "%s/cellgray-%d.jpg", out, i);
+        imwrite(filename, dstGray);
+
         try {
             Ref<LuminanceSource> source = MatSource::create(dstGray);
-            // Search for QR code
-            Ref<Reader> reader;
-            reader.reset(new QRCodeReader);
             Ref<Binarizer> binarizer(new GlobalHistogramBinarizer(source));
             Ref<BinaryBitmap> bitmap(new BinaryBitmap(binarizer));
+            Ref<Reader> reader;
+            reader.reset(new QRCodeReader);
+            DecodeHints hints(DecodeHints::DEFAULT_HINT); 
+		    hints.setTryHarder(true);   
             Ref<Result> result(reader->decode(bitmap, DecodeHints(DecodeHints::TRYHARDER_HINT)));
 
             // Get result point count
             int resultPointCount = result->getResultPoints()->size();
             if (resultPointCount > 0) {
+                cout << "region-" << i << ":" << numberRect << endl;
                 cout << "region-" << i << ":" << result->getText()->getText() << endl;
-                content.push_back(result->getText()->getText());
+                
+                // find row
+                vector<int>::iterator it = find_if (rows.begin(), rows.end(), [&numberRect, &delta](int a){
+                    return abs(numberRect.y - a) < delta;
+                });
+
+                if (it == rows.end()) {
+                    rows.push_back(numberRect.y);
+                    content.push_back(result->getText()->getText());
+                } else {
+                    int index = it - rows.begin();
+                    content[index] +=  " " + result->getText()->getText();
+                }
             }
 
         } catch (const ReaderException& e) {
-            cerr << e.what() << " (ignoring)" << endl;
+            cerr << "ReaderException: " << e.what() << " (ignoring)" << endl;
         } catch (const zxing::IllegalArgumentException& e) {
             cerr << e.what() << " (ignoring)" << endl;
         } catch (const zxing::Exception& e) {
@@ -274,11 +448,10 @@ int main(int argc, char *argv[])
 
     // Print
     num = content.size();
-    cout << "Image Result: ";
+    cout << "Image Result: " << endl;
     for(int i=0; i < num; i++) {
-        cout << content[i] << " ";
+        cout << content[i] << endl;
     }
-    cout << endl;
 
     waitKey(0);
     return 0;
