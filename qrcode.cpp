@@ -235,12 +235,30 @@ bool seq_erode(Mat& src, Mat& result, bool show = true){
 
 // 边缘提取
 bool seq_canny(Mat& src, Mat& result, bool show = true){
-    Canny(src, result, 100, 200);
+   
     if (show) {
         showMat("边缘提取", result);  
     }
     return true;
 }
+
+// 缩放
+bool seq_resize(Mat& src, Mat& result, bool show = true){
+    int srcSize = max(src.rows, src.cols);
+    float scale = 160.0 / srcSize;
+
+    int width = cvRound(scale * src.rows);
+    int height = cvRound(scale * src.cols);
+
+    result.create(width, height, CV_8UC3);
+    resize(src, result, result.size());
+        
+    if (show) {
+        showMat("缩放", result);  
+    }
+    return true;
+}
+
 
 
 int main(int argc, char *argv[])
@@ -282,6 +300,7 @@ int main(int argc, char *argv[])
     sequences.insert(make_pair("canny", seq_canny));
     sequences.insert(make_pair("highlightRemove", seq_highlightRemove));
     sequences.insert(make_pair("colorFilter", seq_colorFilter));
+    sequences.insert(make_pair("resize", seq_resize));
 
     Mat img = imread(file);
     namedWindow("原图",0);
@@ -394,8 +413,8 @@ int main(int argc, char *argv[])
         numberRect = rects[i];
         Mat dst(numberRect.height, numberRect.width, CV_8UC4, numberRect.area());
         dst = img(numberRect);
-        Mat dstResize = Mat::zeros(160, 160, CV_8UC3); //我要转化为512*512大小的
-        resize(dst, dstResize, dstResize.size());
+        Mat dstResize; //我要转化为512*512大小的
+        seq_resize(dst, dstResize, false);
         sprintf(filename, "%s/cell-%d.jpg", out, i);
         imwrite(filename, dstResize);
 
