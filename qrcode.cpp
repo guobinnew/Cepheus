@@ -12,6 +12,7 @@
 #include <zxing/MultiFormatReader.h>
 #include <zxing/MatSource.h>
 #include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/videoio.hpp>
@@ -233,6 +234,16 @@ bool seq_erode(Mat& src, Mat& result, bool show = true){
     return true;
 }
 
+// 膨胀
+bool seq_dilate(Mat& src, Mat& result, bool show = true){
+    Mat element = getStructuringElement(MORPH_RECT, Size(10, 10));
+    dilate(src, result, element);
+    if (show) {
+        showMat("膨胀", result);  
+    }
+    return true;
+}
+
 // 边缘提取
 bool seq_canny(Mat& src, Mat& result, bool show = true){
    
@@ -245,7 +256,7 @@ bool seq_canny(Mat& src, Mat& result, bool show = true){
 // 缩放
 bool seq_resize(Mat& src, Mat& result, bool show = true){
     int srcSize = max(src.rows, src.cols);
-    float scale = 160.0 / srcSize;
+    float scale = 256.0 / srcSize;
 
     int width = cvRound(scale * src.rows);
     int height = cvRound(scale * src.cols);
@@ -259,6 +270,33 @@ bool seq_resize(Mat& src, Mat& result, bool show = true){
     return true;
 }
 
+
+// 二维码检测
+static int qid = 0;
+bool qr_detect(Mat& img, Mat& result, bool show = true) {
+    QRCodeDetector QRdetecter;
+	vector<Point> list;
+    bool found = QRdetecter.detect(img, list);
+    cout << "qr_detect: " << found << " points :" << list << endl;
+    if (!found) {
+        result = img.clone();
+    } else {
+        RotatedRect rect = minAreaRect(list);
+        Point2f center((float)img.cols / 2, (float)img.rows / 2);
+        Mat rot = getRotationMatrix2D(center, rect.angle, 1);
+        Rect bbox = RotatedRect(center, img.size(), rect.angle).boundingRect();
+
+        // 仿射变换
+        rot.at<double>(0, 2) += bbox.width / 2.0 - center.x;
+        rot.at<double>(1, 2) += bbox.height / 2.0 - center.y;
+        warpAffine(img, result, rot, bbox.size());         
+     }
+    
+    if (show) {
+        showMat("仿射变换" + to_string(qid++), result);  
+    }
+    return true;
+}
 
 
 int main(int argc, char *argv[])
@@ -297,6 +335,7 @@ int main(int argc, char *argv[])
     sequences.insert(make_pair("binary", seq_binary));
     sequences.insert(make_pair("closure", seq_closure));
     sequences.insert(make_pair("erode", seq_erode));
+    sequences.insert(make_pair("dilate", seq_dilate));
     sequences.insert(make_pair("canny", seq_canny));
     sequences.insert(make_pair("highlightRemove", seq_highlightRemove));
     sequences.insert(make_pair("colorFilter", seq_colorFilter));
@@ -318,7 +357,8 @@ int main(int argc, char *argv[])
     pipeline.push_back("gray");
     pipeline.push_back("closure");
     pipeline.push_back("binary");
-    pipeline.push_back("erode");
+    pipeline.push_back("dilate");
+    //pipeline.push_back("erode");
     //pipeline.push_back("canny");
     
     //
@@ -421,11 +461,15 @@ int main(int argc, char *argv[])
         // Create luminance  source
         Mat dstGray;
         cvtColor(dstResize, dstGray, COLOR_BGR2GRAY);
+        
+
+        Mat dstQr;
+        qr_detect(dstGray, dstQr);
         sprintf(filename, "%s/cellgray-%d.jpg", out, i);
-        imwrite(filename, dstGray);
+        imwrite(filename, dstQr);
 
         try {
-            Ref<LuminanceSource> source = MatSource::create(dstGray);
+            Ref<LuminanceSource> source = MatSource::create(dstQr);
             Ref<Binarizer> binarizer(new GlobalHistogramBinarizer(source));
             Ref<BinaryBitmap> bitmap(new BinaryBitmap(binarizer));
             Ref<Reader> reader;
